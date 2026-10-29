@@ -1,5 +1,7 @@
 # pip install streamlit pymupdf
 # Rode com:  streamlit run interface.py
+import threading
+
 import pymupdf  # PyMuPDF — desenha as páginas do PDF como imagem
 import streamlit as st
 
@@ -10,10 +12,14 @@ st.set_page_config(page_title="Busca no PDF", page_icon="📄", layout="wide")
 @st.cache_resource(show_spinner="Lendo o PDF...")
 def carregar():
     from app import ARQUIVO, chain, paginas
-    return chain, pymupdf.open(ARQUIVO), len(paginas)
+    return chain, pymupdf.open(ARQUIVO), len(paginas), threading.Lock()
 
 
-chain, pdf, total_paginas = carregar()
+chain, pdf, total_paginas, trava_pdf = carregar()
+
+# Celular: tela estreita, o PDF abre numa janela por cima. Teste no PC com ?celular=1
+agente = st.context.headers.get("User-Agent", "")
+celular = st.query_params.get("celular") == "1" or "Mobi" in agente or "Android" in agente
 
 # Memória da conversa e da página aberta no visualizador
 st.session_state.setdefault("historico", [])   # [{"trecho": ..., "achados": [...]}]
@@ -26,22 +32,63 @@ def abrir_pagina(numero, destaque=""):
     st.session_state.destaque = destaque
 
 
+def clicar_resposta(numero, destaque):
+    abrir_pagina(numero, destaque)
+    st.session_state.abrir_janela = celular
+
+
 def desenhar_pagina(numero, destaque):
-    pagina = pdf[numero - 1]
-    if destaque:
-        for area in pagina.search_for(destaque):  # marca o trecho se ele aparecer literalmente
-            pagina.add_highlight_annot(area)
-    imagem = pagina.get_pixmap(dpi=110).tobytes("png")
-    # Remove as marcações para não acumular no PDF aberto em memória
-    for anotacao in list(pagina.annots() or []):
-        pagina.delete_annot(anotacao)
+    # O PDF é compartilhado entre todos os usuários: um desenho por vez
+    with trava_pdf:
+        pagina = pdf[numero - 1]
+        if destaque:
+            for area in pagina.search_for(destaque):  # marca o trecho se ele aparecer literalmente
+                pagina.add_highlight_annot(area)
+        imagem = pagina.get_pixmap(dpi=150).tobytes("png")
+        # Remove as marcações para não acumular no PDF aberto em memória
+        for anotacao in list(pagina.annots() or []):
+            pagina.delete_annot(anotacao)
     return imagem
 
 
-st.title("📄 Busca de trechos no PDF")
-col_chat, col_pdf = st.columns([1, 1], gap="large")
+def visualizador():
+    pag = st.session_state.pagina
+    if celular:
+        # Um só campo com − / +: no celular as colunas ficariam empilhadas
+        nova = st.number_input(f"Página (de {total_paginas})", 1, total_paginas, pag)
+    else:
+        st.subheader(f"Documento — página {pag} de {total_paginas}")
+        anterior, campo, proxima = st.columns([1, 2, 1])
+        anterior.button("◀ Anterior", on_click=abrir_pagina, args=(pag - 1,),
+                        disabled=pag <= 1, width="stretch")
+        proxima.button("Próxima ▶", on_click=abrir_pagina, args=(pag + 1,),
+                       disabled=pag >= total_paginas, width="stretch")
+        nova = campo.number_input("Ir para a página", 1, total_paginas, pag,
+                                  label_visibility="collapsed")
+    if nova != pag:
+        abrir_pagina(int(nova))
+        st.rerun(scope="fragment" if celular else "app")
 
-# ---------- Coluna da conversa ----------
+    imagem = desenhar_pagina(pag, st.session_state.destaque)
+    if celular:
+        st.image(imagem, width="stretch")
+    else:
+        with st.container(height=800):
+            st.image(imagem, width="stretch")
+
+
+@st.dialog("Documento", width="large")
+def janela_pdf():
+    visualizador()
+
+
+st.title("📄 Busca de trechos no PDF")
+if celular:
+    col_chat = st.container()
+else:
+    col_chat, col_pdf = st.columns([1, 1], gap="large")
+
+# ---------- Conversa ----------
 with col_chat:
     st.subheader("Conversa")
     for i, item in enumerate(st.session_state.historico):
@@ -54,7 +101,7 @@ with col_chat:
                 st.button(
                     f"📄 Página {a['pagina']} — {a['resumo']}",
                     key=f"resp-{i}-{j}",
-                    on_click=abrir_pagina,
+                    on_click=clicar_resposta,
                     args=(a["pagina"], item["trecho"]),
                     width="stretch",
                 )
@@ -69,22 +116,10 @@ if trecho:
         abrir_pagina(achados[0]["pagina"], trecho)  # já abre a mais relevante
     st.rerun()
 
-# ---------- Coluna do PDF ----------
-with col_pdf:
-    pag = st.session_state.pagina
-    st.subheader(f"Documento — página {pag} de {total_paginas}")
-
-    anterior, campo, proxima = st.columns([1, 2, 1])
-    anterior.button("◀ Anterior", on_click=abrir_pagina, args=(pag - 1,),
-                    disabled=pag <= 1, width="stretch")
-    proxima.button("Próxima ▶", on_click=abrir_pagina, args=(pag + 1,),
-                   disabled=pag >= total_paginas, width="stretch")
-    ir_para = campo.number_input("Ir para a página", 1, total_paginas, pag,
-                                 label_visibility="collapsed")
-    if ir_para != pag:
-        abrir_pagina(int(ir_para))
-        st.rerun()
-
-    with st.container(height=800):
-        st.image(desenhar_pagina(pag, st.session_state.destaque),
-                 width="stretch")
+# ---------- PDF ----------
+if celular:
+    if st.session_state.pop("abrir_janela", False):
+        janela_pdf()
+else:
+    with col_pdf:
+        visualizador()
