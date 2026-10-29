@@ -1,0 +1,9 @@
+langchain-openai==1.7.2
+langchain-community==0.4.2
+langchain-core==1.6.12
+pydantic==2.14.1
+pypdf==6.21.1
+python-dotenv==1.2.4
+truststore==0.10.5
+streamlit==1.66.0
+pymupdf==1.28.2

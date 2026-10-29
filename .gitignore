@@ -1,0 +1,6 @@
+# Nunca suba a chave da OpenAI
+.env
+.streamlit/secrets.toml
+
+.venv/
+__pycache__/
