@@ -1,5 +1,6 @@
 # pip install streamlit pymupdf
 # Rode com:  streamlit run interface.py
+import base64
 import threading
 
 import pymupdf  # PyMuPDF — desenha as páginas do PDF como imagem
@@ -25,6 +26,7 @@ celular = st.query_params.get("celular") == "1" or "Mobi" in agente or "Android"
 st.session_state.setdefault("historico", [])   # [{"trecho": ..., "achados": [...]}]
 st.session_state.setdefault("pagina", 1)
 st.session_state.setdefault("destaque", "")    # trecho a marcar na página
+st.session_state.setdefault("zoom", 100)       # % da largura do visualizador
 
 
 def abrir_pagina(numero, destaque=""):
@@ -37,14 +39,14 @@ def clicar_resposta(numero, destaque):
     st.session_state.abrir_janela = celular
 
 
-def desenhar_pagina(numero, destaque):
+def desenhar_pagina(numero, destaque, dpi):
     # O PDF é compartilhado entre todos os usuários: um desenho por vez
     with trava_pdf:
         pagina = pdf[numero - 1]
         if destaque:
             for area in pagina.search_for(destaque):  # marca o trecho se ele aparecer literalmente
                 pagina.add_highlight_annot(area)
-        imagem = pagina.get_pixmap(dpi=150).tobytes("png")
+        imagem = pagina.get_pixmap(dpi=dpi).tobytes("png")
         # Remove as marcações para não acumular no PDF aberto em memória
         for anotacao in list(pagina.annots() or []):
             pagina.delete_annot(anotacao)
@@ -69,12 +71,17 @@ def visualizador():
         abrir_pagina(int(nova))
         st.rerun(scope="fragment" if celular else "app")
 
-    imagem = desenhar_pagina(pag, st.session_state.destaque)
-    if celular:
-        st.image(imagem, width="stretch")
-    else:
-        with st.container(height=800):
-            st.image(imagem, width="stretch")
+    zoom = st.slider("🔍 Zoom", 50, 300, step=25, format="%d%%", key="zoom")
+    # Mais zoom, mais resolução — assim a página não fica borrada ao ampliar
+    imagem = desenhar_pagina(pag, st.session_state.destaque, dpi=min(300, 150 * zoom // 100))
+    png = base64.b64encode(imagem).decode()
+    altura = "70vh" if celular else "800px"
+    # Caixa com rolagem nos dois sentidos: com zoom alto a página fica maior que a tela
+    st.html(
+        f'<div style="height:{altura}; overflow:auto; border:1px solid #ddd; border-radius:8px">'
+        f'<img src="data:image/png;base64,{png}" style="width:{zoom}%; max-width:none; display:block">'
+        "</div>"
+    )
 
 
 @st.dialog("Documento", width="large")
